@@ -104,15 +104,15 @@
         <div class="col-lg-4">
           <div class="card mb-3">
             <h6 class="m-3">Top 10 por Investimento</h6>
-            <div id="chart_top_spend" style="height:300px;"></div>
+            <div id="chart_top_spend" style="height:400px;"></div>
           </div>
           <div class="card mb-3">
             <h6 class="m-3">Top 10 por ROAS</h6>
-            <div id="chart_top_roas" style="height:300px;"></div>
+            <div id="chart_top_roas" style="height:400px;"></div>
           </div>
           <div class="card mb-3">
             <h6 class="m-3">Top 10 Vendas por Investimento</h6>
-            <div id="chart_top_sales_investment" style="height:300px;"></div>
+            <div id="chart_top_sales_investment" style="height:400px;"></div>
           </div>
         </div>
       </div>
@@ -277,16 +277,70 @@
         return;
       }
       
-      // Debug: log first few items to see what data we're getting
-      if (id === 'chart_top_spend') {
-        console.log("DEBUG: top_spend data sample:", arr.slice(0, 3));
-      }
-      
       const x = useTitle ? arr.map(r => r['title'] || r['campaign']) : arr.map(r => r['campaign']);
       const y = arr.map(r => r[valueKey] || 0);
-      const trace = [{ x: x.reverse(), y: y.reverse(), type:'bar' }];
-      const layout = { title: label, margin:{t:40, b:120}, xaxis:{tickangle:-45} };
-      Plotly.newPlot(id, trace, layout, {responsive:true});
+      
+      // Truncate long labels for better display
+      const truncatedX = x.map(label => {
+        if (typeof label === 'string' && label.length > 20) {
+          return label.substring(0, 18) + '...';
+        }
+        return label;
+      });
+      
+      // Format hover template based on value type
+      let hoverTemplate;
+      if (valueKey === 'spend') {
+        hoverTemplate = '<b>%{text}</b><br>Investimento: R$ %{y:,.2f}<extra></extra>';
+      } else if (valueKey === 'roas' || valueKey === 'sales_per_investment') {
+        hoverTemplate = '<b>%{text}</b><br>Valor: %{y:.2f}<extra></extra>';
+      } else {
+        hoverTemplate = '<b>%{text}</b><br>Valor: %{y}<extra></extra>';
+      }
+      
+      const trace = [{ 
+        x: truncatedX.reverse(), 
+        y: y.reverse(), 
+        type: 'bar',
+        hovertemplate: hoverTemplate,
+        text: x.reverse() // Full text for hover
+      }];
+      
+      // Format y-axis based on value type
+      let yAxisFormat = {};
+      if (valueKey === 'spend') {
+        yAxisFormat = {
+          tickformat: 'R$ ,.0f'
+        };
+      } else if (valueKey === 'roas' || valueKey === 'sales_per_investment') {
+        yAxisFormat = {
+          tickformat: '.2f'
+        };
+      }
+      
+      const layout = { 
+        title: { text: label, font: { size: 13 } },
+        margin: { t: 40, b: 140, l: 60, r: 30 },
+        xaxis: { 
+          tickangle: -45,
+          tickfont: { size: 9 },
+          automargin: true
+        },
+        yaxis: {
+          tickfont: { size: 9 },
+          ...yAxisFormat
+        },
+        showlegend: false,
+        autosize: true
+      };
+      
+      const config = { 
+        responsive: true, 
+        displayModeBar: false,
+        useResizeHandler: true
+      };
+      
+      Plotly.newPlot(id, trace, layout, config);
     }
 
     function populateTable(rows) {
@@ -411,15 +465,25 @@
         renderKPIs(result.kpis);
         renderDailyChart(result.daily);
         renderTrendChart(result.daily);
-        renderTopBar('chart_top_spend', result.top_spend, 'spend', 'Top 10 por Investimento', false);
-        renderTopBar('chart_top_roas', result.top_roas, 'roas', 'Top 10 por ROAS', false);
-        renderTopBar('chart_top_sales_investment', result.top_sales_investment, 'sales_per_investment', 'Top 10 Vendas por Investimento', true);
+        
+        // enable sections first to ensure proper layout calculation
+        document.getElementById('charts').classList.remove('d-none');
+        document.getElementById('tableSection').classList.remove('d-none');
+        
+        // Small delay to ensure DOM is fully rendered before creating charts
+        setTimeout(() => {
+          renderTopBar('chart_top_spend', result.top_spend, 'spend', '', false);
+          renderTopBar('chart_top_roas', result.top_roas, 'roas', '', false);
+          renderTopBar('chart_top_sales_investment', result.top_sales_investment, 'sales_per_investment', '', true);
+          
+          // Force resize after charts are created
+          setTimeout(() => {
+            window.dispatchEvent(new Event('resize'));
+          }, 100);
+        }, 50);
 
         populateTable(result.processed_sample);
 
-        // enable sections
-        document.getElementById('charts').classList.remove('d-none');
-        document.getElementById('tableSection').classList.remove('d-none');
         document.getElementById('exportBtn').disabled = false;
         // attach export handler using processed_sample
         const sample = result.processed_sample;
