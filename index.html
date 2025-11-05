@@ -18,8 +18,8 @@
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 
   <!-- PyScript -->
-  <link rel="stylesheet" href="https://pyscript.net/latest/pyscript.css" />
-  <script defer src="https://pyscript.net/latest/pyscript.js"></script>
+  <link rel="stylesheet" href="https://pyscript.net/releases/2025.8.1/core.css" />
+  <script type="module" src="https://pyscript.net/releases/2025.8.1/core.js"></script>
 
   <style>
     body { background: #f6f8fb; }
@@ -110,13 +110,28 @@
             <h6 class="m-3">Top 10 por ROAS</h6>
             <div id="chart_top_roas" style="height:300px;"></div>
           </div>
+          <div class="card mb-3">
+            <h6 class="m-3">Top 10 Vendas por Investimento</h6>
+            <div id="chart_top_sales_investment" style="height:300px;"></div>
+          </div>
         </div>
       </div>
     </section>
 
     <!-- Table -->
     <section id="tableSection" class="mb-4 d-none">
-      <h5>Dados processados (amostra)</h5>
+      <div class="row mb-3">
+        <div class="col-md-4">
+          <label for="monthFilter" class="form-label small">Filtrar por mês:</label>
+          <select id="monthFilter" class="form-select form-select-sm">
+            <option value="">Todos os meses</option>
+          </select>
+        </div>
+        <div class="col-md-8 d-flex align-items-end">
+          <button id="clearFilter" class="btn btn-outline-secondary btn-sm">Limpar filtro</button>
+        </div>
+      </div>
+      <h5>Dados processados</h5>
       <div class="table-responsive">
         <table id="dataTable" class="display" style="width:100%"></table>
       </div>
@@ -178,174 +193,16 @@
       });
     }
 
-    // Bridge to PyScript: set global var and run python processing
+    // Bridge to PyScript: call Python processing function
     async function processWithPy(dataJson) {
-      // dataJson: array of objects
-      // set in pyodide globals
-      // pyscript exposes pyodide via globalThis.pyscript.interpreter? but pyodide is available as globalThis.pyodide when PyScript is loaded.
-      if (!window.pyodide) {
-        throw new Error('Pyodide não carregado ainda. Aguarde a inicialização do PyScript e tente novamente.');
+      // Wait for PyScript to be ready and main.py to be loaded
+      if (!window.processDataPython) {
+        throw new Error('Pyodide/PyScript não carregado ainda. Aguarde a inicialização e tente novamente.');
       }
-      // make the data available in pyodide
-      window.pyodide.globals.set("input_json", dataJson);
-
-      // Python code to run: create pandas DataFrame, normalize columns, compute KPIs and aggregated outputs
-      const pyCode = `
-import pandas as pd
-import math
-# receive input_json from JS
-data = input_json
-
-# Create DataFrame
-df = pd.DataFrame(data)
-
-# Normalize column names: strip, lower, remove newlines and accents
-def norm_col(c):
-    import unicodedata
-    if c is None:
-        return ''
-    s = str(c).strip().lower().replace('\\n',' ').replace('\\r',' ')
-    s = ''.join(ch for ch in unicodedata.normalize('NFD', s) if unicodedata.category(ch) != 'Mn')
-    s = ''.join(ch for ch in s if ch.isalnum() or ch in [' ','_','-'])
-    s = ' '.join(s.split())
-    return s
-
-orig_cols = list(df.columns)
-col_map = {orig: norm_col(orig) for orig in orig_cols}
-df = df.rename(columns=col_map)
-
-# Known column name candidates (normalized)
-candidates = {
-    'date_from':['desde','from','data inicio','data','desde'],
-    'date_to':['ate','até','to','data fim','data final','ate'],
-    'campaign':['campanha','campaign','campaign name','campaign_name','titulo do anuncio patrocinado','titulo do anuncio'],
-    'title':['titulo do anuncio patrocinado','titulo','title'],
-    'code':['codigo do anuncio','codigo','code','id anuncio'],
-    'status':['status','estado'],
-    'impressions':['impressões','impressao','impressions','impr'],
-    'clicks':['cliques','clicks','click'],
-    'cpc':['cpc (custo por clique)','cpc','cpc ( custo por clique )'],
-    'ctr':['ctr (click through rate)','ctr','ctr (click through rate)'],
-    'cvr':['cvr (conversion rate)','cvr','conversion rate'],
-    'revenue':['receita (moeda local)','receita','revenue','receita'],
-    'investment':['investimento (moeda local)','investimento','spend','investment','gasto'],
-    'acos':['acos (investimento / receitas)','acos','acos ( investimento / receitas)'],
-    'roas':['roas (receitas / investimento)','roas','roas ( receitas / investimento)'],
-    'sales_direct':['vendas diretas','vendas diretas'],
-    'sales_indirect':['vendas indiretas','vendas indiretas'],
-    'sales_total':['vendas por publicidade (diretas + indiretas)','vendas por publicidade','vendas por publicidade (diretas + indiretas)'],
-    'rev_direct':['receita por vendas diretas (moeda local)','receita por vendas diretas','receita por vendas diretas (moeda local)'],
-    'rev_indirect':['receita por vendas indiretas','receita por vendas indiretas']
-}
-
-# function to find a df column for candidate list
-def find_col(df, names):
-    for n in names:
-        if n in df.columns:
-            return n
-    return None
-
-mapped = {}
-for key, names in candidates.items():
-    mapped[key] = find_col(df, names)
-
-# create standardized columns if possible
-# parse numeric columns safely
-def to_numeric_col(col):
-    if col and col in df.columns:
-        # remove currency symbols and thousand separators if strings
-        return pd.to_numeric(df[col].astype(str).str.replace(r'[^0-9,.-]','', regex=True).str.replace('.','', regex=False).str.replace(',','.', regex=False), errors='coerce')
-    else:
-        return pd.Series([float('nan')]*len(df))
-
-impr = to_numeric_col(mapped['impressions'])
-clicks = to_numeric_col(mapped['clicks'])
-spend = to_numeric_col(mapped['investment'])
-revenue = to_numeric_col(mapped['revenue'])
-
-# Dates: prefer 'date_from' (Since) or any date-like column
-date_col = mapped['date_from'] or mapped['date_to'] or None
-if date_col and date_col in df.columns:
-    # try parse
-    dates = pd.to_datetime(df[date_col], errors='coerce', dayfirst=True)
-else:
-    # attempt to detect any datetime-like column
-    dates = None
-    for c in df.columns:
-        if 'date' in c or 'data' in c:
-            dates = pd.to_datetime(df[c], errors='coerce', dayfirst=True)
-            break
-
-# Build processed dataframe
-proc = pd.DataFrame()
-proc['campaign'] = df[mapped['campaign']].astype(str) if mapped['campaign'] in df.columns else df.get(mapped['title'], pd.Series(['']*len(df))).astype(str)
-proc['date'] = dates
-proc['impressions'] = impr
-proc['clicks'] = clicks
-proc['spend'] = spend
-proc['revenue'] = revenue
-
-# Derived metrics
-proc['ctr'] = proc['clicks'] / proc['impressions']
-proc['cpc'] = proc['spend'] / proc['clicks']
-proc['roas'] = proc['revenue'] / proc['spend']
-proc['acos'] = proc['spend'] / proc['revenue']
-
-# KPIs overall
-total_invest = float(proc['spend'].sum(skipna=True) or 0.0)
-total_revenue = float(proc['revenue'].sum(skipna=True) or 0.0)
-roas_mean = float(proc['roas'].mean(skipna=True) or 0.0)
-acos_mean = float(proc['acos'].mean(skipna=True) or 0.0)
-cpc_mean = float(proc['cpc'].mean(skipna=True) or 0.0)
-total_impr = int(proc['impressions'].sum(skipna=True) or 0)
-total_clicks = int(proc['clicks'].sum(skipna=True) or 0)
-
-# daily aggregation (by date)
-daily = None
-if 'date' in proc.columns and proc['date'].notna().any():
-    daily = proc.groupby(proc['date'].dt.strftime('%Y-%m-%d')).agg({
-        'impressions':'sum',
-        'clicks':'sum',
-        'spend':'sum',
-        'revenue':'sum'
-    }).reset_index()
-    daily['ctr'] = daily['clicks'] / daily['impressions']
-    daily['cpc'] = daily['spend'] / daily['clicks']
-    daily['roas'] = daily['revenue'] / daily['spend']
-
-# top campaigns by spend and ROAS
-top_spend = proc.groupby('campaign').agg({'spend':'sum'}).reset_index().sort_values('spend', ascending=False).head(10)
-top_roas = proc.groupby('campaign').agg({'revenue':'sum','spend':'sum'}).reset_index()
-top_roas['roas'] = top_roas['revenue'] / top_roas['spend']
-top_roas = top_roas.sort_values('roas', ascending=False).head(10)
-
-# Prepare outputs as pure python structures (serializable)
-out = {
-    'kpis': {
-        'total_invest': total_invest,
-        'total_revenue': total_revenue,
-        'roas_mean': roas_mean,
-        'acos_mean': acos_mean,
-        'cpc_mean': cpc_mean,
-        'total_impressions': int(total_impr),
-        'total_clicks': int(total_clicks)
-    },
-    'daily': daily.to_dict(orient='records') if daily is not None else [],
-    'top_spend': top_spend.to_dict(orient='records'),
-    'top_roas': top_roas.to_dict(orient='records'),
-    'processed_sample': proc.fillna('').head(200).to_dict(orient='records'),
-}
-`
-      ;
-      // run the code asynchronously
-      await window.pyodide.runPythonAsync(pyCode);
-      // get the output 'out' variable from python
-      const out = window.pyodide.globals.get('out');
-      // convert to JS object
-      const result = out.toJs({dict_converter: Object.fromEntries});
-      // cleanup global var
-      window.pyodide.globals.delete('input_json');
-      window.pyodide.globals.delete('out');
+      
+      // Call the Python function exposed from main.py
+      // The Python side will handle JS->Python conversion using to_py()
+      const result = window.processDataPython(dataJson);
       return result;
     }
 
@@ -414,12 +271,18 @@ out = {
       Plotly.newPlot('chart_trend', traces, layout, config);
     }
 
-    function renderTopBar(id, arr, valueKey, label) {
+    function renderTopBar(id, arr, valueKey, label, useTitle = false) {
       if (!arr || arr.length === 0) {
         document.getElementById(id).innerHTML = '<div class="p-3 small text-muted">Sem dados suficientes</div>';
         return;
       }
-      const x = arr.map(r => r['campaign'] || r['campaign']);
+      
+      // Debug: log first few items to see what data we're getting
+      if (id === 'chart_top_spend') {
+        console.log("DEBUG: top_spend data sample:", arr.slice(0, 3));
+      }
+      
+      const x = useTitle ? arr.map(r => r['title'] || r['campaign']) : arr.map(r => r['campaign']);
       const y = arr.map(r => r[valueKey] || 0);
       const trace = [{ x: x.reverse(), y: y.reverse(), type:'bar' }];
       const layout = { title: label, margin:{t:40, b:120}, xaxis:{tickangle:-45} };
@@ -428,8 +291,9 @@ out = {
 
     function populateTable(rows) {
       const columns = [
-        { title: 'Campaign', data: 'campaign' },
-        { title: 'Date', data: 'date' },
+        { title: 'Campanha', data: 'campaign' },
+        { title: 'Data Início', data: 'date_start' },
+        { title: 'Data Fim', data: 'date_end' },
         { title: 'Impressões', data: 'impressions' },
         { title: 'Cliques', data: 'clicks' },
         { title: 'Investimento', data: 'spend' },
@@ -438,22 +302,74 @@ out = {
         { title: 'CPC', data: 'cpc' },
         { title: 'ROAS', data: 'roas' }
       ];
+      
+      // Store full data for filtering
+      window.fullTableData = rows;
+      
       if ($.fn.DataTable.isDataTable('#dataTable')) {
         $('#dataTable').DataTable().destroy();
         $('#dataTable').empty();
       }
+      
       $('#dataTable').DataTable({
         data: rows,
         columns: columns,
-        pageLength: 10,
+        pageLength: 25,
         order: [[1, 'desc']],
         columnDefs: [
-          { targets: [2,3], render: $.fn.dataTable.render.number('.', ',', 0, '') },
-          { targets: [4,5,7], render: function(data){ return (isNaN(data) ? '' : Number(data).toLocaleString('pt-BR', {style:'currency', currency:'BRL'})); } },
-          { targets: [6], render: function(data){ return (isNaN(data) ? '' : (data*100).toFixed(2)+'%'); } },
-          { targets: [8], render: function(data){ return (data === null || isNaN(data) ? '' : Number(data).toFixed(2)); } }
+          // impressions (idx 3) and clicks (idx 4)
+          { targets: [3,4], render: $.fn.dataTable.render.number('.', ',', 0, '') },
+          // spend (idx 5), revenue (idx 6), cpc (idx 8)
+          { targets: [5,6,8], render: function(data){ return (data === null || data === '' || isNaN(data) ? '' : Number(data).toLocaleString('pt-BR', {style:'currency', currency:'BRL'})); } },
+          // ctr (idx 7)
+          { targets: [7], render: function(data){ return (data === null || isNaN(data) ? '' : (data*100).toFixed(2)+'%'); } },
+          // roas (idx 9)
+          { targets: [9], render: function(data){ return (data === null || isNaN(data) ? '' : Number(data).toFixed(2)); } }
         ]
       });
+      
+      // Populate month filter
+      populateMonthFilter(rows);
+    }
+    
+    function populateMonthFilter(rows) {
+      const monthSet = new Set();
+      const monthNames = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
+      
+      rows.forEach(row => {
+        if (row.date_start && row.date_start !== '') {
+          const month = row.date_start.substring(3, 5); // Extract MM from dd/mm/YYYY (positions 3-5)
+          if (monthNames.includes(month)) {
+            monthSet.add(month);
+          }
+        }
+      });
+      
+      const monthFilter = document.getElementById('monthFilter');
+      monthFilter.innerHTML = '<option value="">Todos os meses</option>';
+      
+      // Sort months chronologically
+      const sortedMonths = Array.from(monthSet).sort((a, b) => parseInt(a) - parseInt(b));
+      sortedMonths.forEach(month => {
+        const option = document.createElement('option');
+        option.value = month;
+        option.textContent = `${parseInt(month)}/2025`; // Format as "9/2025"
+        monthFilter.appendChild(option);
+      });
+    }
+    
+    function filterTableByMonth(month) {
+      if (!window.fullTableData) return;
+      
+      let filteredData = window.fullTableData;
+      if (month && month !== '') {
+        filteredData = window.fullTableData.filter(row => {
+          return row.date_start && row.date_start.includes(`/${month}/`);
+        });
+      }
+      
+      const table = $('#dataTable').DataTable();
+      table.clear().rows.add(filteredData).draw();
     }
 
     // Export processed sample to CSV
@@ -495,8 +411,9 @@ out = {
         renderKPIs(result.kpis);
         renderDailyChart(result.daily);
         renderTrendChart(result.daily);
-        renderTopBar('chart_top_spend', result.top_spend, 'spend', 'Top 10 por Investimento');
-        renderTopBar('chart_top_roas', result.top_roas, 'roas', 'Top 10 por ROAS');
+        renderTopBar('chart_top_spend', result.top_spend, 'spend', 'Top 10 por Investimento', false);
+        renderTopBar('chart_top_roas', result.top_roas, 'roas', 'Top 10 por ROAS', false);
+        renderTopBar('chart_top_sales_investment', result.top_sales_investment, 'sales_per_investment', 'Top 10 Vendas por Investimento', true);
 
         populateTable(result.processed_sample);
 
@@ -515,31 +432,21 @@ out = {
         document.getElementById('message').innerText = 'Erro ao processar o arquivo. Verifique se a aba e as colunas existem.';
       }
     });
+    
+    // Month filter event listeners
+    document.getElementById('monthFilter').addEventListener('change', (e) => {
+      filterTableByMonth(e.target.value);
+    });
+    
+    document.getElementById('clearFilter').addEventListener('click', () => {
+      document.getElementById('monthFilter').value = '';
+      filterTableByMonth('');
+    });
 
-    // ensure Pyodide is ready (pyscript loads it). Wait for pyodide to be defined.
-    async function waitPyodide() {
-      // PyScript exposes pyodide on globalThis when loaded
-      const maxWait = 30000;
-      const interval = 200;
-      let waited = 0;
-      while (!window.pyodide && waited < maxWait) {
-        await new Promise(r => setTimeout(r, interval));
-        waited += interval;
-      }
-      if (!window.pyodide) {
-        console.warn('pyodide não carregado dentro do tempo limite — técnicas podem falhar.');
-      }
-    }
-    waitPyodide();
   </script>
 
-  <!-- py-env to ensure pandas available -->
-  <py-env>
-    - pandas
-    - python-dateutil
-    - pytz
-    - numpy
-  </py-env>
+  <!-- PyScript configuration and main Python file -->
+  <script type="py" src="./main.py" config="./pyscript.toml"></script>
 
 </body>
 </html>
