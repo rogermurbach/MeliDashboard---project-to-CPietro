@@ -17,7 +17,7 @@ Dashboard interativo para análise de dados de anúncios patrocinados do Mercado
 
 ## Pré-requisitos
 
-- **Python 3.7+** instalado no sistema
+- **Python 3.7+** instalado no sistema (https://www.python.org/downloads/)
 - **Navegador moderno** com suporte a WebAssembly (Chrome, Firefox, Edge)
 - **Conexão com internet** (para carregar bibliotecas CDN na primeira execução)
 
