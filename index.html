@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dashboard Mercado Livre Ads — PyScript (client-side)</title>
+
+  <!-- Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- DataTables CSS -->
+  <link href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css" rel="stylesheet">
+
+  <!-- Plotly -->
+  <script src="https://cdn.plot.ly/plotly-2.25.2.min.js"></script>
+
+  <!-- SheetJS (XLSX) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+  <!-- PyScript -->
+  <link rel="stylesheet" href="https://pyscript.net/latest/pyscript.css" />
+  <script defer src="https://pyscript.net/latest/pyscript.js"></script>
+
+  <style>
+    body { background: #f6f8fb; }
+    .card { border-radius: 10px; box-shadow: 0 6px 18px rgba(48,54,66,0.06); }
+    .kpi { font-weight:700; font-size:1.25rem; }
+    .table-responsive { background: #fff; padding: 12px; border-radius: 8px; }
+    #charts .card { padding: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container py-4">
+    <header class="d-flex align-items-center pb-3 mb-3 border-bottom">
+      <h1 class="h4 me-auto">Mercado Livre Ads — Dashboard (PyScript)</h1>
+      <div class="text-muted small">Processamento no navegador — aba: <strong>Relatório Anúncios patrocinados</strong></div>
+    </header>
+
+    <!-- Upload -->
+    <section class="mb-4">
+      <div class="row g-2 align-items-center">
+        <div class="col-md-6">
+          <input id="fileInput" class="form-control" type="file" accept=".csv,.xlsx,.xls" />
+        </div>
+        <div class="col-auto">
+          <button id="processBtn" class="btn btn-primary">Processar arquivo</button>
+        </div>
+        <div class="col-auto">
+          <button id="exportBtn" class="btn btn-outline-secondary" disabled>Exportar CSV processado</button>
+        </div>
+        <div class="col-12 mt-2">
+          <div id="message" class="small text-muted">Selecione o arquivo Excel (o dashboard procura a aba <strong>Relatório Anúncios patrocinados</strong>).</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- KPIs -->
+    <section id="kpiSection" class="mb-4 d-none">
+      <div class="row g-3">
+        <div class="col-md-3">
+          <div class="card p-3">
+            <div class="small text-muted">Investimento total</div>
+            <div id="kpiInvest" class="kpi">R$ 0,00</div>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <div class="card p-3">
+            <div class="small text-muted">Receita total</div>
+            <div id="kpiRevenue" class="kpi">R$ 0,00</div>
+          </div>
+        </div>
+        <div class="col-md-2">
+          <div class="card p-3">
+            <div class="small text-muted">ROAS médio</div>
+            <div id="kpiRoas" class="kpi">0.00</div>
+          </div>
+        </div>
+        <div class="col-md-2">
+          <div class="card p-3">
+            <div class="small text-muted">ACOS médio</div>
+            <div id="kpiAcos" class="kpi">0.00</div>
+          </div>
+        </div>
+        <div class="col-md-2">
+          <div class="card p-3">
+            <div class="small text-muted">CPC médio</div>
+            <div id="kpiCpc" class="kpi">R$ 0,00</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Charts -->
+    <section id="charts" class="mb-4 d-none">
+      <div class="row">
+        <div class="col-lg-8">
+          <div class="card mb-3">
+            <div id="chart_daily" style="height:420px;"></div>
+          </div>
+          <div class="card mb-3">
+            <div id="chart_trend" style="height:380px;"></div>
+          </div>
+        </div>
+        <div class="col-lg-4">
+          <div class="card mb-3">
+            <h6 class="m-3">Top 10 por Investimento</h6>
+            <div id="chart_top_spend" style="height:300px;"></div>
+          </div>
+          <div class="card mb-3">
+            <h6 class="m-3">Top 10 por ROAS</h6>
+            <div id="chart_top_roas" style="height:300px;"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Table -->
+    <section id="tableSection" class="mb-4 d-none">
+      <h5>Dados processados (amostra)</h5>
+      <div class="table-responsive">
+        <table id="dataTable" class="display" style="width:100%"></table>
+      </div>
+    </section>
+
+    <footer class="mt-4">
+      <div class="small text-muted">Dica: se o nome das colunas diferir muito do padrão, renomeie a aba para usar os nomes detectados ou me envie o exemplo — ajusto o mapeamento automaticamente.</div>
+    </footer>
+  </div>
+
+  <!-- jQuery / DataTables / Bootstrap JS -->
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+  <!-- Main JS orchestration: SheetJS -> PyScript (pandas) -> Plotly/DataTables -->
+  <script type="text/javascript">
+    // Utilities: normalize header names (lowercase, remove spaces/newlines/accents)
+    function normalizeHeader(h) {
+      if (!h && h !== 0) return '';
+      let s = String(h).toLowerCase().trim();
+      s = s.replace(/\n/g, ' ');
+      s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // remove accents
+      s = s.replace(/[^a-z0-9 _-]/g, '');
+      s = s.replace(/\s+/g, ' ').trim();
+      return s;
+    }
+
+    // Find target sheet by exact name or normalized match
+    function findTargetSheet(wb) {
+      const targetExact = 'Relatório Anúncios patrocinados';
+      for (const name of wb.SheetNames) {
+        if (name === targetExact) return name;
+      }
+      // fallback: normalized match
+      for (const name of wb.SheetNames) {
+        if (normalizeHeader(name).includes(normalizeHeader('Relatório Anúncios patrocinados').slice(0,6))) return name;
+      }
+      return null;
+    }
+
+    async function parseExcelFile(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const data = new Uint8Array(e.target.result);
+          const wb = XLSX.read(data, {type: 'array'});
+          const sheetName = findTargetSheet(wb);
+          if (!sheetName) {
+            reject(new Error('Aba "Relatório Anúncios patrocinados" não encontrada no arquivo.'));
+            return;
+          }
+          const sheet = wb.Sheets[sheetName];
+          const json = XLSX.utils.sheet_to_json(sheet, {defval: null});
+          resolve({sheetName, json});
+        };
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    // Bridge to PyScript: set global var and run python processing
+    async function processWithPy(dataJson) {
+      // dataJson: array of objects
+      // set in pyodide globals
+      // pyscript exposes pyodide via globalThis.pyscript.interpreter? but pyodide is available as globalThis.pyodide when PyScript is loaded.
+      if (!window.pyodide) {
+        throw new Error('Pyodide não carregado ainda. Aguarde a inicialização do PyScript e tente novamente.');
+      }
+      // make the data available in pyodide
+      window.pyodide.globals.set("input_json", dataJson);
+
+      // Python code to run: create pandas DataFrame, normalize columns, compute KPIs and aggregated outputs
+      const pyCode = `
+import pandas as pd
+import math
+# receive input_json from JS
+data = input_json
+
+# Create DataFrame
+df = pd.DataFrame(data)
+
+# Normalize column names: strip, lower, remove newlines and accents
+def norm_col(c):
+    import unicodedata
+    if c is None:
+        return ''
+    s = str(c).strip().lower().replace('\\n',' ').replace('\\r',' ')
+    s = ''.join(ch for ch in unicodedata.normalize('NFD', s) if unicodedata.category(ch) != 'Mn')
+    s = ''.join(ch for ch in s if ch.isalnum() or ch in [' ','_','-'])
+    s = ' '.join(s.split())
+    return s
+
+orig_cols = list(df.columns)
+col_map = {orig: norm_col(orig) for orig in orig_cols}
+df = df.rename(columns=col_map)
+
+# Known column name candidates (normalized)
+candidates = {
+    'date_from':['desde','from','data inicio','data','desde'],
+    'date_to':['ate','até','to','data fim','data final','ate'],
+    'campaign':['campanha','campaign','campaign name','campaign_name','titulo do anuncio patrocinado','titulo do anuncio'],
+    'title':['titulo do anuncio patrocinado','titulo','title'],
+    'code':['codigo do anuncio','codigo','code','id anuncio'],
+    'status':['status','estado'],
+    'impressions':['impressões','impressao','impressions','impr'],
+    'clicks':['cliques','clicks','click'],
+    'cpc':['cpc (custo por clique)','cpc','cpc ( custo por clique )'],
+    'ctr':['ctr (click through rate)','ctr','ctr (click through rate)'],
+    'cvr':['cvr (conversion rate)','cvr','conversion rate'],
+    'revenue':['receita (moeda local)','receita','revenue','receita'],
+    'investment':['investimento (moeda local)','investimento','spend','investment','gasto'],
+    'acos':['acos (investimento / receitas)','acos','acos ( investimento / receitas)'],
+    'roas':['roas (receitas / investimento)','roas','roas ( receitas / investimento)'],
+    'sales_direct':['vendas diretas','vendas diretas'],
+    'sales_indirect':['vendas indiretas','vendas indiretas'],
+    'sales_total':['vendas por publicidade (diretas + indiretas)','vendas por publicidade','vendas por publicidade (diretas + indiretas)'],
+    'rev_direct':['receita por vendas diretas (moeda local)','receita por vendas diretas','receita por vendas diretas (moeda local)'],
+    'rev_indirect':['receita por vendas indiretas','receita por vendas indiretas']
+}
+
+# function to find a df column for candidate list
+def find_col(df, names):
+    for n in names:
+        if n in df.columns:
+            return n
+    return None
+
+mapped = {}
+for key, names in candidates.items():
+    mapped[key] = find_col(df, names)
+
+# create standardized columns if possible
+# parse numeric columns safely
+def to_numeric_col(col):
+    if col and col in df.columns:
+        # remove currency symbols and thousand separators if strings
+        return pd.to_numeric(df[col].astype(str).str.replace(r'[^0-9,.-]','', regex=True).str.replace('.','', regex=False).str.replace(',','.', regex=False), errors='coerce')
+    else:
+        return pd.Series([float('nan')]*len(df))
+
+impr = to_numeric_col(mapped['impressions'])
+clicks = to_numeric_col(mapped['clicks'])
+spend = to_numeric_col(mapped['investment'])
+revenue = to_numeric_col(mapped['revenue'])
+
+# Dates: prefer 'date_from' (Since) or any date-like column
+date_col = mapped['date_from'] or mapped['date_to'] or None
+if date_col and date_col in df.columns:
+    # try parse
+    dates = pd.to_datetime(df[date_col], errors='coerce', dayfirst=True)
+else:
+    # attempt to detect any datetime-like column
+    dates = None
+    for c in df.columns:
+        if 'date' in c or 'data' in c:
+            dates = pd.to_datetime(df[c], errors='coerce', dayfirst=True)
+            break
+
+# Build processed dataframe
+proc = pd.DataFrame()
+proc['campaign'] = df[mapped['campaign']].astype(str) if mapped['campaign'] in df.columns else df.get(mapped['title'], pd.Series(['']*len(df))).astype(str)
+proc['date'] = dates
+proc['impressions'] = impr
+proc['clicks'] = clicks
+proc['spend'] = spend
+proc['revenue'] = revenue
+
+# Derived metrics
+proc['ctr'] = proc['clicks'] / proc['impressions']
+proc['cpc'] = proc['spend'] / proc['clicks']
+proc['roas'] = proc['revenue'] / proc['spend']
+proc['acos'] = proc['spend'] / proc['revenue']
+
+# KPIs overall
+total_invest = float(proc['spend'].sum(skipna=True) or 0.0)
+total_revenue = float(proc['revenue'].sum(skipna=True) or 0.0)
+roas_mean = float(proc['roas'].mean(skipna=True) or 0.0)
+acos_mean = float(proc['acos'].mean(skipna=True) or 0.0)
+cpc_mean = float(proc['cpc'].mean(skipna=True) or 0.0)
+total_impr = int(proc['impressions'].sum(skipna=True) or 0)
+total_clicks = int(proc['clicks'].sum(skipna=True) or 0)
+
+# daily aggregation (by date)
+daily = None
+if 'date' in proc.columns and proc['date'].notna().any():
+    daily = proc.groupby(proc['date'].dt.strftime('%Y-%m-%d')).agg({
+        'impressions':'sum',
+        'clicks':'sum',
+        'spend':'sum',
+        'revenue':'sum'
+    }).reset_index()
+    daily['ctr'] = daily['clicks'] / daily['impressions']
+    daily['cpc'] = daily['spend'] / daily['clicks']
+    daily['roas'] = daily['revenue'] / daily['spend']
+
+# top campaigns by spend and ROAS
+top_spend = proc.groupby('campaign').agg({'spend':'sum'}).reset_index().sort_values('spend', ascending=False).head(10)
+top_roas = proc.groupby('campaign').agg({'revenue':'sum','spend':'sum'}).reset_index()
+top_roas['roas'] = top_roas['revenue'] / top_roas['spend']
+top_roas = top_roas.sort_values('roas', ascending=False).head(10)
+
+# Prepare outputs as pure python structures (serializable)
+out = {
+    'kpis': {
+        'total_invest': total_invest,
+        'total_revenue': total_revenue,
+        'roas_mean': roas_mean,
+        'acos_mean': acos_mean,
+        'cpc_mean': cpc_mean,
+        'total_impressions': int(total_impr),
+        'total_clicks': int(total_clicks)
+    },
+    'daily': daily.to_dict(orient='records') if daily is not None else [],
+    'top_spend': top_spend.to_dict(orient='records'),
+    'top_roas': top_roas.to_dict(orient='records'),
+    'processed_sample': proc.fillna('').head(200).to_dict(orient='records'),
+}
+`
+      ;
+      // run the code asynchronously
+      await window.pyodide.runPythonAsync(pyCode);
+      // get the output 'out' variable from python
+      const out = window.pyodide.globals.get('out');
+      // convert to JS object
+      const result = out.toJs({dict_converter: Object.fromEntries});
+      // cleanup global var
+      window.pyodide.globals.delete('input_json');
+      window.pyodide.globals.delete('out');
+      return result;
+    }
+
+    // Render functions (Plotly + DataTable)
+    function renderKPIs(kpis) {
+      document.getElementById('kpiInvest').innerText = (kpis.total_invest || 0).toLocaleString('pt-BR', {style:'currency', currency:'BRL'});
+      document.getElementById('kpiRevenue').innerText = (kpis.total_revenue || 0).toLocaleString('pt-BR', {style:'currency', currency:'BRL'});
+      document.getElementById('kpiRoas').innerText = ((kpis.roas_mean || 0)).toFixed(2);
+      document.getElementById('kpiAcos').innerText = ((kpis.acos_mean || 0)).toFixed(2);
+      document.getElementById('kpiCpc').innerText = (kpis.cpc_mean || 0).toLocaleString('pt-BR', {style:'currency', currency:'BRL'});
+      document.getElementById('kpiSection').classList.remove('d-none');
+    }
+
+    function renderDailyChart(daily) {
+      if (!daily || daily.length === 0) {
+        document.getElementById('chart_daily').innerHTML = '<div class="p-3 small text-muted">Sem dados de data válidos para gerar o gráfico diário.</div>';
+        return;
+      }
+      const x = daily.map(r => r['date']);
+      const impressions = daily.map(r => r['impressions'] || 0);
+      const clicks = daily.map(r => r['clicks'] || 0);
+      const spend = daily.map(r => r['spend'] || 0);
+      const traces = [
+        { x, y: impressions, name: 'Impressões', type: 'bar' },
+        { x, y: clicks, name: 'Cliques', type: 'bar' },
+        { x, y: spend, name: 'Investimento', type: 'scatter', yaxis: 'y2', mode:'lines+markers' }
+      ];
+      const layout = {
+        title: 'Desempenho Diário',
+        barmode: 'group',
+        yaxis:{title:'Impressões / Cliques'},
+        yaxis2:{title:'Investimento', overlaying:'y', side:'right'},
+        margin:{t:40, r:60}
+      };
+      Plotly.newPlot('chart_daily', traces, layout, {responsive:true});
+    }
+
+    function renderTrendChart(daily) {
+      if (!daily || daily.length === 0) {
+        document.getElementById('chart_trend').innerHTML = '<div class="p-3 small text-muted">Sem dados de data válidos para gerar tendência (ROAS/ACOS).</div>';
+        return;
+      }
+      const x = daily.map(r => r['date']);
+      const roas = daily.map(r => (r['roas'] === null ? null : r['roas']));
+      // For ACOS we don't have daily in python output, approximate: acos = spend/revenue -> if spend=0 set null
+      const acos = daily.map(r => {
+        if (!r['revenue'] || r['revenue'] == 0) return null;
+        return (r['spend'] || 0) / r['revenue'];
+      });
+      const cpc = daily.map(r => r['cpc'] || 0);
+
+      const traces = [
+        { x, y: roas, name: 'ROAS', mode:'lines+markers', yaxis:'y1' },
+        { x, y: acos, name: 'ACOS', mode:'lines+markers', yaxis:'y2' },
+        { x, y: cpc, name: 'CPC', mode:'lines+markers', yaxis:'y3' }
+      ];
+      const layout = {
+        title: 'Tendência: ROAS / ACOS / CPC',
+        yaxis:{title:'ROAS'},
+        yaxis2:{title:'ACOS', overlaying:'y', side:'right'},
+        yaxis3:{title:'CPC', anchor:'free', overlaying:'y', side:'right', position: 0.95},
+        margin:{t:40}
+      };
+      // Plotly supports multiple y-axes; here we show composite layout
+      const config = {responsive:true};
+      Plotly.newPlot('chart_trend', traces, layout, config);
+    }
+
+    function renderTopBar(id, arr, valueKey, label) {
+      if (!arr || arr.length === 0) {
+        document.getElementById(id).innerHTML = '<div class="p-3 small text-muted">Sem dados suficientes</div>';
+        return;
+      }
+      const x = arr.map(r => r['campaign'] || r['campaign']);
+      const y = arr.map(r => r[valueKey] || 0);
+      const trace = [{ x: x.reverse(), y: y.reverse(), type:'bar' }];
+      const layout = { title: label, margin:{t:40, b:120}, xaxis:{tickangle:-45} };
+      Plotly.newPlot(id, trace, layout, {responsive:true});
+    }
+
+    function populateTable(rows) {
+      const columns = [
+        { title: 'Campaign', data: 'campaign' },
+        { title: 'Date', data: 'date' },
+        { title: 'Impressões', data: 'impressions' },
+        { title: 'Cliques', data: 'clicks' },
+        { title: 'Investimento', data: 'spend' },
+        { title: 'Receita', data: 'revenue' },
+        { title: 'CTR', data: 'ctr' },
+        { title: 'CPC', data: 'cpc' },
+        { title: 'ROAS', data: 'roas' }
+      ];
+      if ($.fn.DataTable.isDataTable('#dataTable')) {
+        $('#dataTable').DataTable().destroy();
+        $('#dataTable').empty();
+      }
+      $('#dataTable').DataTable({
+        data: rows,
+        columns: columns,
+        pageLength: 10,
+        order: [[1, 'desc']],
+        columnDefs: [
+          { targets: [2,3], render: $.fn.dataTable.render.number('.', ',', 0, '') },
+          { targets: [4,5,7], render: function(data){ return (isNaN(data) ? '' : Number(data).toLocaleString('pt-BR', {style:'currency', currency:'BRL'})); } },
+          { targets: [6], render: function(data){ return (isNaN(data) ? '' : (data*100).toFixed(2)+'%'); } },
+          { targets: [8], render: function(data){ return (data === null || isNaN(data) ? '' : Number(data).toFixed(2)); } }
+        ]
+      });
+    }
+
+    // Export processed sample to CSV
+    function exportCSV(rows) {
+      if (!rows || rows.length === 0) { alert('Sem dados para exportar'); return; }
+      const header = Object.keys(rows[0]);
+      const lines = [header.join(',')];
+      rows.forEach(r => {
+        const line = header.map(h => {
+          const v = r[h];
+          if (v === null || v === undefined) return '';
+          const s = String(v).replace(/"/g, '""');
+          return `"${s}"`;
+        });
+        lines.push(line.join(','));
+      });
+      const blob = new Blob([lines.join('\n')], {type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'processed_sample_ml_ads.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    // Orchestrator
+    document.getElementById('processBtn').addEventListener('click', async () => {
+      const fileInput = document.getElementById('fileInput');
+      const file = fileInput.files[0];
+      if (!file) { alert('Selecione o arquivo Excel primeiro'); return; }
+      document.getElementById('message').innerText = 'Processando — lendo arquivo e executando análise...';
+      try {
+        const {sheetName, json} = await parseExcelFile(file);
+        // call PyScript / Pyodide to compute metrics
+        const result = await processWithPy(json);
+
+        // render results
+        renderKPIs(result.kpis);
+        renderDailyChart(result.daily);
+        renderTrendChart(result.daily);
+        renderTopBar('chart_top_spend', result.top_spend, 'spend', 'Top 10 por Investimento');
+        renderTopBar('chart_top_roas', result.top_roas, 'roas', 'Top 10 por ROAS');
+
+        populateTable(result.processed_sample);
+
+        // enable sections
+        document.getElementById('charts').classList.remove('d-none');
+        document.getElementById('tableSection').classList.remove('d-none');
+        document.getElementById('exportBtn').disabled = false;
+        // attach export handler using processed_sample
+        const sample = result.processed_sample;
+        document.getElementById('exportBtn').onclick = () => exportCSV(sample);
+
+        document.getElementById('message').innerText = `Processamento concluído — aba: ${sheetName}`;
+      } catch (err) {
+        console.error(err);
+        alert('Erro: ' + (err.message || err));
+        document.getElementById('message').innerText = 'Erro ao processar o arquivo. Verifique se a aba e as colunas existem.';
+      }
+    });
+
+    // ensure Pyodide is ready (pyscript loads it). Wait for pyodide to be defined.
+    async function waitPyodide() {
+      // PyScript exposes pyodide on globalThis when loaded
+      const maxWait = 30000;
+      const interval = 200;
+      let waited = 0;
+      while (!window.pyodide && waited < maxWait) {
+        await new Promise(r => setTimeout(r, interval));
+        waited += interval;
+      }
+      if (!window.pyodide) {
+        console.warn('pyodide não carregado dentro do tempo limite — técnicas podem falhar.');
+      }
+    }
+    waitPyodide();
+  </script>
+
+  <!-- py-env to ensure pandas available -->
+  <py-env>
+    - pandas
+    - python-dateutil
+    - pytz
+    - numpy
+  </py-env>
+
+</body>
+</html>
