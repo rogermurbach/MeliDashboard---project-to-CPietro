@@ -354,7 +354,8 @@
         { title: 'Receita', data: 'revenue' },
         { title: 'CTR', data: 'ctr' },
         { title: 'CPC', data: 'cpc' },
-        { title: 'ROAS', data: 'roas' }
+        { title: 'ROAS', data: 'roas' },
+        { title: 'Vendas Por Publicidade', data: 'sales_total' },
       ];
       
       // Store full data for filtering
@@ -416,14 +417,173 @@
       if (!window.fullTableData) return;
       
       let filteredData = window.fullTableData;
+      let filteredDailyData = window.fullDailyData || [];
+      let filteredTopSpendData = window.fullTopSpendData || [];
+      let filteredTopRoasData = window.fullTopRoasData || [];
+      let filteredTopSalesInvestmentData = window.fullTopSalesInvestmentData || [];
+      
       if (month && month !== '') {
+        // Filter table data
         filteredData = window.fullTableData.filter(row => {
           return row.date_start && row.date_start.includes(`/${month}/`);
         });
+        
+        // Filter daily data (convert date format for comparison)
+        filteredDailyData = (window.fullDailyData || []).filter(row => {
+          if (!row.date) return false;
+          // Convert dd/mm/YYYY to mm for comparison
+          const parts = row.date.split('/');
+          if (parts.length === 3) {
+            return parts[1] === month;
+          }
+          return false;
+        });
+        
+        // For top charts, we need to re-aggregate based on filtered data
+        // This is complex, so for now we'll show all data but indicate filter is active
+        // A better approach would require re-processing the data in Python
       }
       
+      // Update table
       const table = $('#dataTable').DataTable();
       table.clear().rows.add(filteredData).draw();
+      
+      // Update daily charts
+      renderDailyChart(filteredDailyData);
+      renderTrendChart(filteredDailyData);
+      
+      // Update top charts - calculate from filtered data
+      if (month && month !== '') {
+        const filteredTopCharts = calculateTopChartsFromFilteredData(filteredData);
+        renderTopBar('chart_top_spend', filteredTopCharts.topSpend, 'spend', '', false);
+        renderTopBar('chart_top_roas', filteredTopCharts.topRoas, 'roas', '', false);
+        renderTopBar('chart_top_sales_investment', filteredTopCharts.topSalesInvestment, 'sales_per_investment', '', true);
+      } else {
+        // Show original data when filter is cleared
+        renderTopBar('chart_top_spend', filteredTopSpendData, 'spend', '', false);
+        renderTopBar('chart_top_roas', filteredTopRoasData, 'roas', '', false);
+        renderTopBar('chart_top_sales_investment', filteredTopSalesInvestmentData, 'sales_per_investment', '', true);
+      }
+      
+      // Calculate and update KPIs from filtered data
+      if (month && month !== '') {
+        updateKPIsFromFilteredData(filteredData);
+      } else {
+        // Restore original KPIs when filter is cleared
+        renderKPIs(window.originalKpis);
+      }
+      
+      // Update message to show filter status
+      const messageEl = document.getElementById('message');
+      if (month && month !== '') {
+        messageEl.innerHTML = `Filtrando por mês: ${parseInt(month)}/2025 (${filteredData.length} registros na tabela)`;
+      } else {
+        messageEl.innerHTML = 'Todos os meses exibidos';
+      }
+    }
+    
+    function calculateTopChartsFromFilteredData(data) {
+      // Group data by campaign and calculate totals
+      const campaignData = {};
+      
+      data.forEach(row => {
+        const campaign = row.campaign || '';
+        const title = row.title || campaign;
+        const spend = parseFloat(row.spend) || 0;
+        const revenue = parseFloat(row.revenue) || 0;
+        const salesTotal = parseFloat(row.sales_total) || 0;
+        
+        if (!campaignData[title]) {
+          campaignData[title] = {
+            title: title,
+            spend: 0,
+            revenue: 0,
+            sales_total: 0
+          };
+        }
+        
+        campaignData[title].spend += spend;
+        campaignData[title].revenue += revenue;
+        campaignData[title].sales_total += salesTotal;
+      });
+      
+      // Convert to array and calculate metrics
+      const campaignArray = Object.values(campaignData);
+      
+      // Calculate ROAS and Sales per Investment
+      campaignArray.forEach(item => {
+        item.roas = item.spend > 0 ? item.revenue / item.spend : 0;
+        item.sales_per_investment = item.spend > 0 ? item.sales_total / item.spend : 0;
+      });
+      
+      // Get top 10 by each metric
+      const topSpend = campaignArray
+        .sort((a, b) => b.spend - a.spend)
+        .slice(0, 10)
+        .map(item => ({ campaign: item.title, spend: item.spend }));
+      
+      const topRoas = campaignArray
+        .sort((a, b) => b.roas - a.roas)
+        .slice(0, 10)
+        .map(item => ({ campaign: item.title, roas: item.roas }));
+      
+      const topSalesInvestment = campaignArray
+        .sort((a, b) => b.sales_per_investment - a.sales_per_investment)
+        .slice(0, 10)
+        .map(item => ({ campaign: item.title, sales_per_investment: item.sales_per_investment }));
+      
+      return {
+        topSpend: topSpend,
+        topRoas: topRoas,
+        topSalesInvestment: topSalesInvestment
+      };
+    }
+    
+    function updateKPIsFromFilteredData(data) {
+      // Calculate KPIs from filtered data
+      let totalInvest = 0;
+      let totalRevenue = 0;
+      let roasSum = 0;
+      let acosSum = 0;
+      let cpcSum = 0;
+      let roasCount = 0;
+      let acosCount = 0;
+      let cpcCount = 0;
+      
+      data.forEach(row => {
+        const spend = parseFloat(row.spend) || 0;
+        const revenue = parseFloat(row.revenue) || 0;
+        const roas = parseFloat(row.roas) || 0;
+        const acos = parseFloat(row.acos) || 0;
+        const cpc = parseFloat(row.cpc) || 0;
+        
+        totalInvest += spend;
+        totalRevenue += revenue;
+        
+        if (!isNaN(roas) && isFinite(roas)) {
+          roasSum += roas;
+          roasCount++;
+        }
+        if (!isNaN(acos) && isFinite(acos)) {
+          acosSum += acos;
+          acosCount++;
+        }
+        if (!isNaN(cpc) && isFinite(cpc)) {
+          cpcSum += cpc;
+          cpcCount++;
+        }
+      });
+      
+      const roasMean = roasCount > 0 ? roasSum / roasCount : 0;
+      const acosMean = acosCount > 0 ? acosSum / acosCount : 0;
+      const cpcMean = cpcCount > 0 ? cpcSum / cpcCount : 0;
+      
+      // Update KPI display
+      document.getElementById('kpiInvest').textContent = `R$ ${totalInvest.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+      document.getElementById('kpiRevenue').textContent = `R$ ${totalRevenue.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+      document.getElementById('kpiRoas').textContent = roasMean.toFixed(2);
+      document.getElementById('kpiAcos').textContent = (acosMean * 100).toFixed(2) + '%';
+      document.getElementById('kpiCpc').textContent = `R$ ${cpcMean.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     }
 
     // Export processed sample to CSV
@@ -483,6 +643,14 @@
         }, 50);
 
         populateTable(result.processed_sample);
+        
+        // Store full data for filtering
+        window.fullTableData = result.processed_sample;
+        window.fullDailyData = result.daily;
+        window.fullTopSpendData = result.top_spend;
+        window.fullTopRoasData = result.top_roas;
+        window.fullTopSalesInvestmentData = result.top_sales_investment;
+        window.originalKpis = result.kpis; // Store original KPIs
 
         document.getElementById('exportBtn').disabled = false;
         // attach export handler using processed_sample
@@ -505,6 +673,7 @@
     document.getElementById('clearFilter').addEventListener('click', () => {
       document.getElementById('monthFilter').value = '';
       filterTableByMonth('');
+      document.getElementById('message').innerText = 'Selecione o arquivo Excel (o dashboard procura a aba <strong>Relatório Anúncios patrocinados</strong>).';
     });
 
   </script>
